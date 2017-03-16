@@ -24,7 +24,7 @@ int main(int argc, char *argv[])
     char ipstr[INET6_ADDRSTRLEN];
 
     /* user input */
-    int portno, n;
+    char *portno = NULL;
 
 
 	if (argc != 3) {
@@ -32,9 +32,10 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-    /* read stdin for port number */
-    portno = atio(argv[2]);
-    if(portno < 0) portno = SERVERPORT;
+	/* read stdin for port number */
+	portno = argv[2];
+	if(portno == NULL) portno = SERVERPORT;
+
     /* set parameter for getaddrinfo*/
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;

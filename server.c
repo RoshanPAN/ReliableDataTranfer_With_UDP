@@ -16,6 +16,7 @@
 #define MYPORT "4950"	// the port users will be connecting to
 
 #define MAXBUFLEN 1025
+#define PATH_LEN 100
 
 typedef int bool;
 #define true 1
@@ -31,13 +32,35 @@ void *get_in_addr(struct sockaddr *sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-int parseMsg(char *buf)
+int parseMsgType(char* buf)
 {
+    char num = buf[0];
+    printf("%c", num);
+    char tmp[2];
+    tmp[0] = num;
+    tmp[1] = '\0';
+    return atoi(tmp);
+}
 
+char * parseFileName(char *buf)
+{
+    char *tmp;
+    char path[100];
+    if (getcwd(path, sizeof(path)) == NULL)
+        fprintf(stdout, "fail to get cwd: %s\n", path);
+//    printf(buf);
+//    printf("-----------\n");
+    tmp = strstr(buf, "\r\n");
+    tmp = tmp + 2;
+//    printf("\ntmp:%s", tmp);
+    strcat(path, "/");
+    strcat(path, tmp);
+    tmp = path;
+    return tmp;
 }
 
 
-int main(void)
+int main(int argc, char *argv[])
 {
 	int sockfd;
 	struct addrinfo hints, *servinfo, *p;
@@ -48,17 +71,35 @@ int main(void)
 	socklen_t addr_len;
 	char s[INET6_ADDRSTRLEN];
     char ipstr[INET6_ADDRSTRLEN];
+    char *portno;
 
-    /* variables to control file sending */
+
+    /* variables during processing client request */
+    int msg_type = -1;
+    char *file_name = NULL;
+    char *file_path = NULL;
+    char *tmp1 = NULL;
+	FILE *fd;
+
+    /* FSM workflow control */
     bool is_complete = false;
 
+    /* read stdin for port number */
+    portno = argv[1];
+
+    if(portno == NULL) {
+		portno = (char *) malloc(sizeof MYPORT);
+		memset(portno, 0, sizeof portno);
+		strcpy(portno, MYPORT);
+	}
+	printf("%s", portno);
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;//AF_UNSPEC; // set to AF_INET to force IPv4
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_flags = AI_PASSIVE; // use my IP (AI_PASSIVE  tells getaddrinfo() to assign the address of my local host to the socket structures)
 
-	if ((rv = getaddrinfo(NULL, MYPORT, &hints, &servinfo)) != 0) {
+	if ((rv = getaddrinfo(NULL, portno, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
@@ -84,7 +125,7 @@ int main(void)
         
         // convert the IP to a string and print it:
         inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
-        printf("  %s: %s\n", ipver, ipstr);
+        printf(" %s: %s\n", ipver, ipstr);
         /************************************/
         
         
@@ -107,28 +148,72 @@ int main(void)
 		fprintf(stderr, "listener: failed to bind socket\n");
 		return 2;
 	}
+	printf("########## 1 ########");
 
 	freeaddrinfo(servinfo);
-
     // Step 1: wait for the 1st message
-    // if msg type == 1, then enter Finite State Machine to start transfer file
-	// else, print error msg
-    printf("listener: waiting for client msg (recvfrom)...\n");
+    // if msg type != 1, print error msg
+	// else, then enter Finite State Machine to start transfer file
+    printf("listener: waiting for client request (port number: %s)...\n", portno);
+	printf("########## 2 ########");
 
-	addr_len = sizeof(their_addr);
-	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
+	memset(buf, 0, MAXBUFLEN);
+    if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
                              (struct sockaddr *)&their_addr, &addr_len)) == -1) {
-		perror("recvfrom");
-		exit(1);
-	}
+        perror("listener: error in receiving client request");
+        exit(1);
+    }
+	addr_len = sizeof(their_addr);
 
 
-	printf("listener: got packet from %s\n",
-		inet_ntop(their_addr.ss_family,
-			get_in_addr((struct sockaddr *)&their_addr), s, sizeof s));
-	printf("listener: packet is %d bytes long\n", numbytes);
-	buf[numbytes] = '\0';
-	printf("listener: packet contains \"%s\"\n", buf);
+    msg_type = parseMsgType(buf);
+	printf("########## %d, msg_type ########\n", msg_type);
+
+	//TODO
+	/* to be deleted */
+	strcpy(buf, "1\n2\n3\r\nProj1.c");
+	/* to be deleted */
+
+    if(msg_type != 1){
+        perror("the client request is not valid.\n");
+        exit(1);
+    }else{
+		printf("shit1\n");
+		file_path = parseFileName(buf);
+		printf("\n\n Path for requested file:%s\n\n", file_path);
+		// read file
+        fd = fopen(file_path, "rb");
+        printf("%d\n", fd);
+        if(fd == NULL){
+			printf("File open error, %s!\n", strerror(errno));
+        }
+    }
+
+
+    // while ((nread = fread(buf, 1, sizeof buf, fd)) > 0)
+
+
+
+
+
+
+
+//    printf("listener: waiting for client msg (recvfrom)...\n");
+//
+//	addr_len = sizeof(their_addr);
+//	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
+//                             (struct sockaddr *)&their_addr, &addr_len)) == -1) {
+//		perror("recvfrom");
+//		exit(1);
+//	}
+//
+//
+//	printf("listener: got packet from %s\n",
+//		inet_ntop(their_addr.ss_family,
+//			get_in_addr((struct sockaddr *)&their_addr), s, sizeof s));
+//	printf("listener: packet is %d bytes long\n", numbytes);
+//	buf[numbytes] = '\0';
+//	printf("listener: packet contains \"%s\"\n", buf);
 
 	close(sockfd);
 
