@@ -32,8 +32,57 @@ void *get_in_addr(struct sockaddr *sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+/* msg format:
+     * (MsgType::Integer)\n
+     * (NotUsed::Integer)\n
+     * (NotUsed::Integer)\r\n
+     * (MsgContent::char/binary)
+    */
+
+#define FILE_REQUEST 1
+#define FILE_TRANSFER 2
+#define ACK 3
+#define NAK 4
+
+/* When sending Msg */
+void buildMsg(char *msg, int msg_type, char *content){
+
+    // Put whole header + msg content into msg
+    char header[50];
+    bzero(header, sizeof header);
+    sprintf(header, "%d\n0\n0\r\n", msg_type);
+
+    char tmp[2050];
+    bzero(tmp, sizeof tmp);
+    strcpy(tmp, header);
+    strcat(tmp, content);
+    bzero(msg, sizeof msg);
+    strcpy(msg, tmp);
+}
+
+void buildFileRequestMsg(char *msg, char *file_name){
+    buildMsg(msg, FILE_REQUEST, file_name);
+}
+
+void buildFileTransferMsg(char *msg, char *file_chunk){
+    //...
+    buildMsg(msg, FILE_TRANSFER, file_chunk);
+}
+
+void buildACKMsg(char *msg, int next_chunk_id){
+    char chunk_id_str[10];
+    sprintf(chunk_id_str, "%d", next_chunk_id);
+    buildMsg(msg, ACK, chunk_id_str);
+}
+
+void buildNAKMsg(char *msg, int next_chunk_id){
+    char chunk_id_str[10];
+    sprintf(chunk_id_str, "%d", next_chunk_id);
+    buildMsg(msg, NAK, chunk_id_str);
+}
 
 
+/* When Receiving Msg */
 int parseMsgType(char* buf)
 {
     char num = buf[0];
@@ -44,22 +93,18 @@ int parseMsgType(char* buf)
     return atoi(tmp);
 }
 
-void parseFilePath(char *buf, char *file_path)
+void parseMsgContent(char *msg, char *msg_content)
 {
     char *tmp;
     char path[100];
     if (getcwd(path, sizeof(path)) == NULL)
         fprintf(stdout, "fail to get cwd: %s\n", path);
-//    printf(buf);
-//    printf("-----------\n");
-    tmp = strstr(buf, "\r\n");
+    tmp = strstr(msg, "\r\n");
     tmp = tmp + 2;
-//    printf("\ntmp:%s", tmp);
     strcat(path, "/");
     strcat(path, tmp);
-    strcpy(file_path, path);
+    strcpy(msg_content, path);
 }
-
 
 int main(int argc, char *argv[])
 {
@@ -67,9 +112,8 @@ int main(int argc, char *argv[])
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 	int numbytes;
-	struct sockaddr_storage their_addr;
+	struct sockaddr_in client_addr;
 	char buf[MAXBUFLEN];
-	socklen_t addr_len;
 	char s[INET6_ADDRSTRLEN];
     char ipstr[INET6_ADDRSTRLEN];
     char *portno;
@@ -82,11 +126,7 @@ int main(int argc, char *argv[])
     char *tmp1 = NULL;
 	FILE *fd;
 
-    /* file processing */
-    char file_buf[MAXBUFLEN];
 
-    /* FSM workflow control */
-    bool is_complete = false;
 
     /* read stdin for port number */
     portno = argv[1];
@@ -152,57 +192,79 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "listener: failed to bind socket\n");
 		return 2;
 	}
-	printf("########## 1 ########");
 
-	freeaddrinfo(servinfo);
     // Step 1: wait for the 1st message
     // if msg type != 1, print error msg
-	// else, then enter Finite State Machine to start transfer file
+	// else, then go to Step2: enter Finite State Machine to start transfer file
     printf("listener: waiting for client request (port number: %s)...\n", portno);
-	printf("########## 2 ########");
 
 	memset(buf, 0, MAXBUFLEN);
-    if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
-                             (struct sockaddr *)&their_addr, &addr_len)) == -1) {
+    int addr_len = sizeof(client_addr);
+    numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
+                        (struct sockaddr *)&client_addr, (socklen_t *)&addr_len);
+    if (numbytes == -1) {
         perror("listener: error in receiving client request");
         exit(1);
     }
-	addr_len = sizeof(their_addr);
-
+    fflush(stdout);
+    int client_PORT = ntohs(client_addr.sin_port);
+    char* client_IP = inet_ntoa(client_addr.sin_addr);
+    printf("\nClient IP & Port: %s:%d", client_IP, client_PORT);
 
     msg_type = parseMsgType(buf);
-	printf("########## %d, msg_type ########\n", msg_type);
-
-
-
+	printf("\nMessage Type:%d", msg_type);
 
 
 	//TODO
 	/* to be deleted */
-	strcpy(buf, "1\n2\n3\r\n.gitignore");
+	strcpy(buf, "1\n2\n3\r\nLICENSE");
 	/* to be deleted */
+
+
+
 
     if(msg_type != 1){
         perror("the client request is not valid.\n");
         exit(1);
     }else{
-		printf("shit1\n");
         file_path = (char *)malloc(100);
-        parseFilePath(buf, file_path);
+        parseMsgContent(buf, file_path);
 		printf("\nPath for requested file:%s\n\n", file_path);
 		// read file
-        fd = fopen(file_path, "rb");
+        fd = fopen(file_path, "r");
         if(fd == NULL){
             printf("File open error, %s!", strerror(errno));
             printf("fd:%d", fd);
         }
     }
 
-    int nread;
+    /* Step2:
+     * enter Finite State Machine to start transfer file.
+     */
+    /* file processing */
+    char file_buf[MAXBUFLEN];
+    char msg_buf[MAXBUFLEN * 2];
+    /* FSM workflow control */
+    int nread, chunk_id=1;
+    bool is_chunk_complete= false;
+
     bzero(file_buf, sizeof file_buf);
+    printf("Sender Start ::");
+    nread = fread(file_buf, 1, sizeof file_buf, fd);
+
     while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0){
-        printf("%s", file_buf);
+        printf("\n    [Sending]  chunk_id:%d    length:%d", chunk_id, nread);
+        buildFileTransferMsg(msg_buf, file_buf);
+        if ((numbytes = sendto(sockfd,  msg_buf, strlen(msg_buf), 0,
+                               p->ai_addr, p->ai_addrlen)) == -1) {
+            perror("[Sender]: Failed to send ");
+            is_chunk_complete = false;
+        }else{
+            is_chunk_complete = true;
+        }
+
         bzero(file_buf, sizeof file_buf);
+        if(is_chunk_complete) chunk_id++;
     }
 
 
@@ -228,6 +290,7 @@ int main(int argc, char *argv[])
 //	buf[numbytes] = '\0';
 //	printf("listener: packet contains \"%s\"\n", buf);
 
+    freeaddrinfo(servinfo);
 	close(sockfd);
 
 	return 0;
