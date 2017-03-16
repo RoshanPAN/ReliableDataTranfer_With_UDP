@@ -15,7 +15,11 @@
 
 #define MYPORT "4950"	// the port users will be connecting to
 
-#define MAXBUFLEN 100
+#define MAXBUFLEN 1025
+
+typedef int bool;
+#define true 1
+#define false 0
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -26,6 +30,12 @@ void *get_in_addr(struct sockaddr *sa)
 
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
+
+int parseMsg(char *buf)
+{
+
+}
+
 
 int main(void)
 {
@@ -38,6 +48,10 @@ int main(void)
 	socklen_t addr_len;
 	char s[INET6_ADDRSTRLEN];
     char ipstr[INET6_ADDRSTRLEN];
+
+    /* variables to control file sending */
+    bool is_complete = false;
+
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;//AF_UNSPEC; // set to AF_INET to force IPv4
@@ -96,19 +110,22 @@ int main(void)
 
 	freeaddrinfo(servinfo);
 
-	printf("listener: waiting to recvfrom...\n");
+    // Step 1: wait for the 1st message
+    // if msg type == 1, then enter Finite State Machine to start transfer file
+	// else, print error msg
+    printf("listener: waiting for client msg (recvfrom)...\n");
 
 	addr_len = sizeof(their_addr);
 	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
-		(struct sockaddr *)&their_addr, &addr_len)) == -1) {
+                             (struct sockaddr *)&their_addr, &addr_len)) == -1) {
 		perror("recvfrom");
 		exit(1);
 	}
 
+
 	printf("listener: got packet from %s\n",
 		inet_ntop(their_addr.ss_family,
-			get_in_addr((struct sockaddr *)&their_addr),
-			s, sizeof s));
+			get_in_addr((struct sockaddr *)&their_addr), s, sizeof s));
 	printf("listener: packet is %d bytes long\n", numbytes);
 	buf[numbytes] = '\0';
 	printf("listener: packet contains \"%s\"\n", buf);

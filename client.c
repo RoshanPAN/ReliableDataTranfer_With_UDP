@@ -23,24 +23,30 @@ int main(int argc, char *argv[])
 	int numbytes;
     char ipstr[INET6_ADDRSTRLEN];
 
+    /* user input */
+    int portno, n;
+
+
 	if (argc != 3) {
 		fprintf(stderr,"usage: talker hostname message\n");
 		exit(1);
 	}
 
+    /* read stdin for port number */
+    portno = atio(argv[2]);
+    if(portno < 0) portno = SERVERPORT;
+    /* set parameter for getaddrinfo*/
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_DGRAM;
-
-    // "getaddrinfo" will do the DNS lookup for you
-	if ((rv = getaddrinfo(argv[1], SERVERPORT, &hints, &servinfo)) != 0) {
+    // "getaddrinfo" will do the DNS lookup & return
+	if ((rv = getaddrinfo(argv[1], portno, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
 
 	// loop through all the results and make a socket
 	for(p = servinfo; p != NULL; p = p->ai_next) {
-        
         
         /*************Print Info********************/
         void *addr;
@@ -86,6 +92,10 @@ int main(int argc, char *argv[])
 	freeaddrinfo(servinfo);
 
 	printf("talker: sent %d bytes to %s\n", numbytes, argv[1]);
+
+
+
+
 	close(sockfd);
 
 	return 0;
