@@ -32,6 +32,8 @@ void *get_in_addr(struct sockaddr *sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+
+
 int parseMsgType(char* buf)
 {
     char num = buf[0];
@@ -42,7 +44,7 @@ int parseMsgType(char* buf)
     return atoi(tmp);
 }
 
-char * parseFileName(char *buf)
+void parseFilePath(char *buf, char *file_path)
 {
     char *tmp;
     char path[100];
@@ -55,8 +57,7 @@ char * parseFileName(char *buf)
 //    printf("\ntmp:%s", tmp);
     strcat(path, "/");
     strcat(path, tmp);
-    tmp = path;
-    return tmp;
+    strcpy(file_path, path);
 }
 
 
@@ -80,6 +81,9 @@ int main(int argc, char *argv[])
     char *file_path = NULL;
     char *tmp1 = NULL;
 	FILE *fd;
+
+    /* file processing */
+    char file_buf[MAXBUFLEN];
 
     /* FSM workflow control */
     bool is_complete = false;
@@ -169,9 +173,13 @@ int main(int argc, char *argv[])
     msg_type = parseMsgType(buf);
 	printf("########## %d, msg_type ########\n", msg_type);
 
+
+
+
+
 	//TODO
 	/* to be deleted */
-	strcpy(buf, "1\n2\n3\r\nProj1.c");
+	strcpy(buf, "1\n2\n3\r\n.gitignore");
 	/* to be deleted */
 
     if(msg_type != 1){
@@ -179,18 +187,23 @@ int main(int argc, char *argv[])
         exit(1);
     }else{
 		printf("shit1\n");
-		file_path = parseFileName(buf);
-		printf("\n\n Path for requested file:%s\n\n", file_path);
+        file_path = (char *)malloc(100);
+        parseFilePath(buf, file_path);
+		printf("\nPath for requested file:%s\n\n", file_path);
 		// read file
         fd = fopen(file_path, "rb");
-        printf("%d\n", fd);
         if(fd == NULL){
-			printf("File open error, %s!\n", strerror(errno));
+            printf("File open error, %s!", strerror(errno));
+            printf("fd:%d", fd);
         }
     }
 
-
-    // while ((nread = fread(buf, 1, sizeof buf, fd)) > 0)
+    int nread;
+    bzero(file_buf, sizeof file_buf);
+    while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0){
+        printf("%s", file_buf);
+        bzero(file_buf, sizeof file_buf);
+    }
 
 
 
