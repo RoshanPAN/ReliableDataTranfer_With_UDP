@@ -111,9 +111,9 @@ void parseFilePath(char *msg, char *absolute_path){
 
 void parseTheirRcvPort(char *msg, char *their_rcv_port){
     char *tmp;
+    bzero(their_rcv_port, sizeof their_rcv_port);
     tmp = strstr(msg, "\n");
     tmp = tmp + 1;
-    //TODO  cut the port number = length 5
     strncpy(their_rcv_port, tmp, 5);
     their_rcv_port[5] = '\0';
 }
@@ -139,7 +139,8 @@ int main(int argc, char *argv[])
 {
 	int sockfd_rcv, sockfd_snd;
 	struct addrinfo hints, *servinfo, *p;
-	int rv;
+    struct addrinfo hints2, *servinfo2, *p2;
+	int rv, rv2;
 	int numbytes;
 	struct sockaddr_in client_addr;
 	char buf[MAXBUFLEN];
@@ -184,10 +185,8 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-
         // loop through all the results and bind to the first we can
         for(p = servinfo; p != NULL; p = p->ai_next) {
-
             /*************Print Info********************/
             void *addr;
             char *ipver;
@@ -228,16 +227,15 @@ int main(int argc, char *argv[])
         if (p == NULL) {
             fprintf(stderr, "listener: failed to bind socket\n");
             return 2;
+        }else{
+            printf("\nServer: listen for client request on (port number: %s)...\n", rcv_port);
         }
-        freeaddrinfo(servinfo);
-
 
 
 
         // Step 2: wait for the Request message
         // if msg type != 1, print error msg
         // else, then go to Step2: enter Finite State Machine to start transfer file
-        printf("\n\n--------\n\nlistener: listen for client request on (port number: %s)...\n", rcv_port);
 
         memset(buf, 0, MAXBUFLEN);
         int addr_len = sizeof(client_addr);
@@ -248,18 +246,19 @@ int main(int argc, char *argv[])
             exit(1);
         }
         fflush(stdout);
-        int client_PORT = ntohs(client_addr.sin_port);
+        char client_PORT[10];
+        parseTheirRcvPort(buf, client_PORT);
         char *client_IP = inet_ntoa(client_addr.sin_addr);
-        printf("\nClient IP & Port: %s:%d", client_IP, client_PORT);
+        printf("\nClient IP & Port: %s:%s", client_IP, client_PORT);
 
         msg_type = parseMsgType(buf);
         printf("\nMessage Type:%d", msg_type);
 
 
         //TODO
-        /* to be deleted */
-        strcpy(buf, "1\n2\n3\r\nLICENSE");
-        /* to be deleted */
+//        /* to be deleted */
+//        strcpy(buf, "1\n2\n3\r\nLICENSE");
+//        /* to be deleted */
 
 
 
@@ -286,20 +285,19 @@ int main(int argc, char *argv[])
          * Create Sender socket
          */
         /* set parameter for getaddrinfo */
-        memset(&hints, 0, sizeof hints);
-        memset(&servinfo, 0, sizeof servinfo);
-        memset(&p, 0, sizeof p);
+        memset(&hints2, 0, sizeof hints2);
 
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
+        hints2.ai_family = AF_INET;
+        hints2.ai_socktype = SOCK_DGRAM;
+        printf(client_PORT);
         // "getaddrinfo" will do the DNS lookup & return
-        if ((rv = getaddrinfo(client_IP, client_PORT, &hints, &servinfo)) != 0) {
-            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        if ((rv2 = getaddrinfo(client_IP, client_PORT, &hints2, &servinfo2)) != 0) {
+            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv2));
             return 1;
         }
 
         // loop through all the results and make a socket
-        for(p = servinfo; p != NULL; p = p->ai_next) {
+        for(p2 = servinfo2; p2 != NULL; p2 = p2->ai_next) {
 
             /*************Print Info********************/
             void *addr;
@@ -307,30 +305,30 @@ int main(int argc, char *argv[])
 
             // get the pointer to the address itself,
             // different fields in IPv4 and IPv6:
-            if (p->ai_family == AF_INET) { // IPv4
-                struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+            if (p2->ai_family == AF_INET) { // IPv4
+                struct sockaddr_in *ipv4 = (struct sockaddr_in *)p2->ai_addr;
                 addr = &(ipv4->sin_addr);
                 ipver = "IPv4";
             } else { // IPv6
-                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p2->ai_addr;
                 addr = &(ipv6->sin6_addr);
                 ipver = "IPv6";
             }
 
             // convert the IP to a string and print it:
-            inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
+            inet_ntop(p2->ai_family, addr, ipstr, sizeof ipstr);
             printf("  %s: %s\n", ipver, ipstr);
             /************************************/
 
-            if ((sockfd_snd = socket(p->ai_family, p->ai_socktype,
-                                 p->ai_protocol)) == -1) {
+            if ((sockfd_snd = socket(p2->ai_family, p2->ai_socktype,
+                                 p2->ai_protocol)) == -1) {
                 perror("Client: socket creation ");
                 continue;
             }
 
             break;
         }
-        printf("Sender IP: %s, Sender Port: %s, Requested File: %s\n", client_IP, client_PORT, file_name);
+        printf("Send Destination IP: %s, Send Destination Port: %s, Requested File: %s\n", client_IP, client_PORT, file_name);
 
         if (p == NULL) {
             fprintf(stderr, "Sender: failed to bind socket\n");
@@ -369,7 +367,7 @@ int main(int argc, char *argv[])
         sleep(1);
 
         close(sockfd_rcv);
-
+        printf("\n ----- Finish File Sending ---- \n");
 
 
 

@@ -130,7 +130,7 @@ void buildFilePath(char *absolute_path, char *file_name){
 
 int main(int argc, char *argv[])
 {
-	int sockfd;
+	int sockfd_snd, sockfd_rcv;
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 	int numbytes;
@@ -151,12 +151,15 @@ int main(int argc, char *argv[])
     server_IP = argv[1];
     server_port = argv[2];
     file_name = argv[3];
-    sprintf(rcv_port, "%d", (atoi(server_port) + 1));
-    printf("Server IP: %s, Server Listening Port: %s, Requested File: %s", server_IP, server_port, file_name);
-    printf("Client Listening Port: %s", rcv_port);
+    sprintf(rcv_port, "%d", (atoi(server_port) + 10));
+    printf("[STDIN]  Server IP: %s, Server Listening Port: %s, Requested File: %s\n", server_IP, server_port, file_name);
+    printf("[Client] Client Listening Port: %s\n", rcv_port);
 
 
-
+    /*
+     * Setp 1:
+     * Create socket for Sending to Port: server_IP, server_port
+     */
     /* set parameter for getaddrinfo */
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
@@ -166,7 +169,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
-
 
 	// loop through all the results and make a socket
 	for(p = servinfo; p != NULL; p = p->ai_next) {
@@ -192,15 +194,15 @@ int main(int argc, char *argv[])
         printf("  %s: %s\n", ipver, ipstr);
         /************************************/
         
-		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+		if ((sockfd_snd = socket(p->ai_family, p->ai_socktype,
 				p->ai_protocol)) == -1) {
-			perror("Client: socket creation ");
+			perror("[Client] sending socket creation ");
 			continue;
 		}
 
 		break;
 	}
-    printf("Sender IP: %s, Sender Port: %s, Requested File: %s\n", server_IP, server_port, file_name);
+    printf("[Client] Sender IP: %s, Sender Port: %s, Requested File: %s\n", server_IP, server_port, file_name);
 
 	if (p == NULL) {
 		fprintf(stderr, "Sender: failed to bind socket\n");
@@ -208,14 +210,13 @@ int main(int argc, char *argv[])
 	}
 
     /*
-     * Step 1:
+     * Step 2:
      * Send File Request Msg.
      */
     // Build Request Msg
     char *msg[MAXBUFLEN * 2];
-    buildFileRequestMsg(msg, file_name);
-//    if ((numbytes = sendto(sockfd, msg, strlen(msg), 0,
-    if ((numbytes = sendto(sockfd, msg, sizeof msg, 0,
+    buildFileRequestMsg(msg, atoi(rcv_port),file_name);
+    if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
 			 p->ai_addr, p->ai_addrlen)) == -1) {
 		perror("Client: try send file request message to server ");
 		exit(1);
@@ -224,7 +225,73 @@ int main(int argc, char *argv[])
 	printf("Client: Request Msg Sent for  %s:%s length: numbytes: %d\n", server_IP, server_port, numbytes);
 
     /*
-     * Step 2:
+     * Step 3:
+     * create rcv socket for receiving file from server: rcv_port
+     * Receive Msg.
+     */
+    memset(&hints, 0, sizeof hints);
+    memset(&servinfo, 0, sizeof servinfo);
+    memset(&p, 0, sizeof p);
+
+    hints.ai_family = AF_INET;//AF_UNSPEC; // set to AF_INET to force IPv4
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE; // use my IP (AI_PASSIVE  tells getaddrinfo() to assign the address of my local host to the socket structures)
+
+    if ((rv = getaddrinfo(NULL, rcv_port, &hints, &servinfo)) != 0) {  // bind to any local IP & given port
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return 1;
+    }
+
+
+    // loop through all the results and bind to the first we can
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+
+        /*************Print Info********************/
+        void *addr;
+        char *ipver;
+
+        // get the pointer to the address itself,
+        // different fields in IPv4 and IPv6:
+        if (p->ai_family == AF_INET) { // IPv4
+            struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+            addr = &(ipv4->sin_addr);
+            ipver = "IPv4";
+        } else { // IPv6
+            struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+            addr = &(ipv6->sin6_addr);
+            ipver = "IPv6";
+        }
+
+        // convert the IP to a string and print it:
+        inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
+        printf(" %s: %s\n", ipver, ipstr);
+        /************************************/
+
+
+        if ((sockfd_rcv = socket(p->ai_family, p->ai_socktype,
+                                 p->ai_protocol)) == -1) {
+            perror("listener: socket");
+            continue;
+        }
+
+        if (bind(sockfd_rcv, p->ai_addr, p->ai_addrlen) == -1) {
+            close(sockfd_rcv);
+            perror("listener: bind");
+            continue;
+        }
+
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "listener: failed to bind socket\n");
+        return 2;
+    } else{
+        printf("[Receiving] Receiving Socket created & binded.");
+    }
+
+    /*
+     * Step 4:
      * Receive Msg.
      */
     /* file processing */
@@ -255,7 +322,8 @@ int main(int argc, char *argv[])
 
 
     freeaddrinfo(servinfo);
-	close(sockfd);
+    close(sockfd_rcv);
+	close(sockfd_snd);
 
 	return 0;
 }
