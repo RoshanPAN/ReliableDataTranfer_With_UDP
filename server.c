@@ -405,9 +405,10 @@ int main(int argc, char *argv[])
         while ((nread = fread(file_buf, 1, sizeof file_buf - 100, fd)) > 0) {
             printf("\n[Sending]  chunk_id:%d    length:%d\n", chunk_id, nread);
             sleep(0.05);
+//            sleep(5);
             //TODO sequence number
             int msg_len = buildFileTransferMsg(msg_buf, atoi(rcv_port), seq_no,file_buf);
-            printf(msg_buf);
+//            printf(msg_buf);
             if ((numbytes = sendto(sockfd_snd, msg_buf, sizeof msg_buf, 0,
                                    p2->ai_addr, p2->ai_addrlen)) == -1) {
                 perror("[Sender]: Failed to send ");
@@ -434,7 +435,7 @@ int main(int argc, char *argv[])
 
 
 
-        sleep(0.05);
+        sleep(0.1);
 
         close(sockfd_rcv);
         close(sockfd_snd);

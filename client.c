@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <time.h>
 
 #define SERVERPORT "4950"	// the port users will be connecting to
 /* msg format:
@@ -34,6 +35,8 @@
 typedef int bool;
 #define true 1
 #define false 0
+
+#define LOSS_PROB 40
 
 
 
@@ -176,10 +179,22 @@ void appendToFile(char *file_name, char *data_buf){
 
 
 
+ssize_t myRecvfromWithLoss(int __fd, void *__buf, size_t __n, int __flags, struct sockaddr *__addr, socklen_t *__addr_len)
+{
+    ssize_t numbytes;
+    int rand_num = rand() % 100;
+    printf("\n Rand num: %d \n", rand_num);
+    if( rand_num < LOSS_PROB){
+        numbytes = recvfrom(__fd, __buf, __n, __flags, (struct sockaddr *)__addr, (socklen_t *)__addr_len);
+    } else{
+        return -1;
+    }
+
+}
 
 
-
-
+//numbytes = recvfrom(sockfd_rcv, msg_buf, sizeof msg_buf, 0,
+//                    (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
 
 
 
@@ -198,7 +213,6 @@ int main(int argc, char *argv[])
     char *file_name = NULL;
     char *server_IP = NULL;
     char rcv_port[10];
-
 
     /* read stdin for port number */
 	if (argc != 4) {
@@ -367,71 +381,58 @@ int main(int argc, char *argv[])
     bool iscomplete = false;
     struct sockaddr_in server_addr;
     int addr_len = sizeof(server_addr);
-    int current_state = INITIAL_STATE;
+    int current_state = FILE_TRANSFER;
 
-    while(1){
+    while(1)
+    {
         fflush(stdout);
         // Finite State Machine
         switch (current_state)
         {
-            case INITIAL_STATE:
-                // Reset buffer
-                memset(msg_buf, 0, sizeof msg_buf);
-                bzero(data_buf, sizeof data_buf);
-                // Receive msg
-                numbytes = recvfrom(sockfd_rcv, msg_buf, MAXBUFLEN - 1, 0,
-                                    (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
-                // Redirect the FSM into certain state
-                chunk_id ++;
-                switch (parseMsgType(msg_buf)){
-                    case FILE_TRANSFER:
-//                        chunk_id = 1;
-//                        expected_seq_no = 0;
-                        current_state = FILE_TRANSFER; break;
-                    case ERR:
-                        current_state = ERR; break;
-                    case MISSION_OVER:
-                        current_state = MISSION_OVER; break;
-                    default:
-                        current_state = ERR; break;
-                }
-                break;
             case FILE_TRANSFER:
-                parseMsgContent(msg_buf, data_buf);
-                seq_no = parseSequenceNumber(msg);
-                //TODO add logic for rdt, but now, just receive and write into file
-                printf("\n\n\n[Receiving] Receivd chunk #%d, length %d.\n ", chunk_id, numbytes);
-                appendToFile(file_name, data_buf);
-                printf(data_buf);
-                chunk_id ++;
                 // Reset buffer
                 memset(msg_buf, 0, sizeof msg_buf);
                 bzero(data_buf, sizeof data_buf);
                 // Receive msg
                 numbytes = recvfrom(sockfd_rcv, msg_buf, sizeof msg_buf, 0,
                                     (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
-                switch (parseMsgType(msg_buf)){
-                    case FILE_TRANSFER:
-                        current_state = FILE_TRANSFER; break;
-                    case ERR:
-                        current_state = ERR; break;
-                    case MISSION_OVER:
-                        current_state = MISSION_OVER; break;
-                    default:
-                        current_state = ERR; break;
+
+
+                if((rand() % 100) < LOSS_PROB) {
+                    printf("[Receiving] Chunk #%d Loss. \n", chunk_id);
+                    fflush(stdout);
+                    chunk_id ++;
+                }else{
+                    //TODO add logic for rdt, but now, just receive and write into file
+                    parseMsgContent(msg_buf, data_buf);
+                    seq_no = parseSequenceNumber(msg);
+                    printf("[Receiving] Received chunk #%d, length %d.\n ", chunk_id, numbytes);
+                    appendToFile(file_name, data_buf);
+                    chunk_id ++;
                 }
 
+
+
+
+//                switch (parseMsgType(msg_buf)){
+//                    case FILE_TRANSFER:
+//                        current_state = FILE_TRANSFER; break;
+//                    case ERR:
+//                        current_state = ERR; break;
+//                    case MISSION_OVER:
+//                        current_state = MISSION_OVER; break;
+//                    default:
+//                        current_state = ERR; break;
+//                }
                 break;
             case MISSION_OVER:
                 iscomplete = true;
                 break;
-
         }
         if(iscomplete) break;
 
-
     }
-
+    printf("Total number of packages received: %d", chunk_id - 1);
 
     freeaddrinfo(servinfo);
     close(sockfd_rcv);
