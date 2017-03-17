@@ -29,15 +29,13 @@
 typedef int bool;
 #define true 1
 #define false 0
-
 /* When sending Msg */
-void buildMsg(char *msg, int msg_type, char *content){
+void buildMsg(char *msg, int msg_type, int port_num, char *content){
 
     // Put whole header + msg content into msg
     char header[50];
     bzero(header, sizeof header);
-    sprintf(header, "%d\n0\n0\r\n", msg_type);
-
+    sprintf(header, "%d\n%.5d\n0\r\n", msg_type, port_num);
     char tmp[2000];
     bzero(tmp, sizeof tmp);
     strcpy(tmp, header);
@@ -46,25 +44,24 @@ void buildMsg(char *msg, int msg_type, char *content){
     strcpy(msg, tmp);
 }
 
-void buildFileRequestMsg(char *msg, char *file_name){
-    buildMsg(msg, FILE_REQUEST, file_name);
+void buildFileRequestMsg(char *msg, int my_rcv_port_num, char *file_name){
+    buildMsg(msg, 1, my_rcv_port_num, file_name);
 }
 
-void buildFileTransferMsg(char *msg, char *file_chunk){
-    //...
-    buildMsg(msg, FILE_TRANSFER, file_chunk);
+void buildFileTransferMsg(char *msg, int my_rcv_port_num, char *file_chunk){
+    buildMsg(msg, FILE_TRANSFER, my_rcv_port_num, file_chunk);
 }
 
-void buildACKMsg(char *msg, int next_chunk_id){
+void buildACKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, ACK, chunk_id_str);
+    buildMsg(msg, ACK, my_rcv_port_num, chunk_id_str);
 }
 
-void buildNAKMsg(char *msg, int next_chunk_id){
+void buildNAKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, NAK, chunk_id_str);
+    buildMsg(msg, NAK, my_rcv_port_num, chunk_id_str);
 }
 
 
@@ -81,17 +78,55 @@ int parseMsgType(char* buf)
 
 void parseMsgContent(char *msg, char *msg_content)
 {
-
     char *tmp;
+    tmp = strstr(msg, "\r\n");
+    tmp = tmp + 2;
+    strcpy(msg_content, tmp);
+}
+
+
+
+void parseFilePath(char *msg, char *absolute_path){
+    char file_name[100];
+    parseMsgContent(msg, file_name);
+    buildFilePath(absolute_path, file_name);
+}
+
+void parseTheirRcvPort(char *msg, char *their_rcv_port){
+    char *tmp;
+    tmp = strstr(msg, "\n");
+    tmp = tmp + 1;
+    //TODO  cut the port number = length 5
+    strncpy(their_rcv_port, tmp, 5);
+    their_rcv_port[5] = '\0';
+}
+
+
+/*
+ * Helper function for parseFilePath
+ */
+void buildFilePath(char *absolute_path, char *file_name){
     char path[100];
     if (getcwd(path, sizeof(path)) == NULL)
         fprintf(stdout, "fail to get cwd: %s\n", path);
-    tmp = strstr(msg, "\r\n");
-    tmp = tmp + 2;
     strcat(path, "/");
-    strcat(path, tmp);
-    strcpy(msg_content, path);
+    strcat(path, file_name);
+    strcpy(absolute_path, path);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 int main(int argc, char *argv[])
 {
@@ -105,18 +140,21 @@ int main(int argc, char *argv[])
     char *server_port = NULL;
     char *file_name = NULL;
     char *server_IP = NULL;
+    char rcv_port[10];
 
+
+    /* read stdin for port number */
 	if (argc != 4) {
 		fprintf(stderr,"Client: Not Enough Arguments!\n");
 		exit(1);
 	}
-
-	/* read stdin for port number */
     server_IP = argv[1];
     server_port = argv[2];
-	if(server_port == NULL) server_port = SERVERPORT;
     file_name = argv[3];
-    printf("Sender IP: %s, Sender Port: %s, Requested File: %s", server_IP, server_port, file_name);
+    sprintf(rcv_port, "%d", (atoi(server_port) + 1));
+    printf("Server IP: %s, Server Listening Port: %s, Requested File: %s", server_IP, server_port, file_name);
+    printf("Client Listening Port: %s", rcv_port);
+
 
 
     /* set parameter for getaddrinfo */
@@ -162,10 +200,10 @@ int main(int argc, char *argv[])
 
 		break;
 	}
-//    printf("Sender IP: %s, Sender Port: %s, Requested File: %s\n", server_IP, server_port, file_name);
+    printf("Sender IP: %s, Sender Port: %s, Requested File: %s\n", server_IP, server_port, file_name);
 
 	if (p == NULL) {
-		fprintf(stderr, "Client: failed to bind socket\n");
+		fprintf(stderr, "Sender: failed to bind socket\n");
 		return 2;
 	}
 
@@ -176,7 +214,8 @@ int main(int argc, char *argv[])
     // Build Request Msg
     char *msg[MAXBUFLEN * 2];
     buildFileRequestMsg(msg, file_name);
-    if ((numbytes = sendto(sockfd, msg, strlen(msg), 0,
+//    if ((numbytes = sendto(sockfd, msg, strlen(msg), 0,
+    if ((numbytes = sendto(sockfd, msg, sizeof msg, 0,
 			 p->ai_addr, p->ai_addrlen)) == -1) {
 		perror("Client: try send file request message to server ");
 		exit(1);
@@ -194,14 +233,13 @@ int main(int argc, char *argv[])
 //    /* FSM workflow control */
 //    int nread, chunk_id=1;
 //    bool is_chunk_complete= false;
-//    File *fd;
+//    FILE *fd = fopen();
 //
 //    bzero(file_buf, sizeof file_buf);
 //    printf("Receiver Start ::");
-//    nread = fread(file_buf, 1, sizeof file_buf, fd);
-//
-//    while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0){
-//        printf("\n    [Sending]  chunk_id:%d    length:%d", chunk_id, nread);
+    // FSM - Reliable data transfer 3.0
+//    while (1){
+//        printf("\n    [Receiving]  chunk_id:%d    length:%d", chunk_id, nread);
 //        buildFileTransferMsg(msg_buf, file_buf);
 //        if ((numbytes = sendto(sockfd,  msg_buf, strlen(msg_buf), 0,
 //                               p->ai_addr, p->ai_addrlen)) == -1) {

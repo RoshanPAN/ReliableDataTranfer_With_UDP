@@ -13,7 +13,8 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#define MYPORT "4950"	// the port users will be connecting to
+#define SENDER_PORT "14952"	// the port for server to send data
+#define RCV_PORT "14951"  // the port for server to receive msg (NOT used)
 
 #define MAXBUFLEN 1025
 #define PATH_LEN 100
@@ -34,7 +35,7 @@ void *get_in_addr(struct sockaddr *sa)
 
 /* msg format:
      * (MsgType::Integer)\n
-     * (NotUsed::Integer)\n
+     * (rcv_port::Integer)\n
      * (NotUsed::Integer)\r\n
      * (MsgContent::char/binary)
     */
@@ -43,16 +44,15 @@ void *get_in_addr(struct sockaddr *sa)
 #define FILE_TRANSFER 2
 #define ACK 3
 #define NAK 4
-
+#define ERR 5  // file not exists and so on
 /* When sending Msg */
-void buildMsg(char *msg, int msg_type, char *content){
+void buildMsg(char *msg, int msg_type, int port_num, char *content){
 
     // Put whole header + msg content into msg
     char header[50];
     bzero(header, sizeof header);
-    sprintf(header, "%d\n0\n0\r\n", msg_type);
-
-    char tmp[2050];
+    sprintf(header, "%d\n%.5d\n0\r\n", msg_type, port_num);
+    char tmp[2000];
     bzero(tmp, sizeof tmp);
     strcpy(tmp, header);
     strcat(tmp, content);
@@ -60,25 +60,24 @@ void buildMsg(char *msg, int msg_type, char *content){
     strcpy(msg, tmp);
 }
 
-void buildFileRequestMsg(char *msg, char *file_name){
-    buildMsg(msg, FILE_REQUEST, file_name);
+void buildFileRequestMsg(char *msg, int my_rcv_port_num, char *file_name){
+    buildMsg(msg, 1, my_rcv_port_num, file_name);
 }
 
-void buildFileTransferMsg(char *msg, char *file_chunk){
-    //...
-    buildMsg(msg, FILE_TRANSFER, file_chunk);
+void buildFileTransferMsg(char *msg, int my_rcv_port_num, char *file_chunk){
+    buildMsg(msg, FILE_TRANSFER, my_rcv_port_num, file_chunk);
 }
 
-void buildACKMsg(char *msg, int next_chunk_id){
+void buildACKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, ACK, chunk_id_str);
+    buildMsg(msg, ACK, my_rcv_port_num, chunk_id_str);
 }
 
-void buildNAKMsg(char *msg, int next_chunk_id){
+void buildNAKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, NAK, chunk_id_str);
+    buildMsg(msg, NAK, my_rcv_port_num, chunk_id_str);
 }
 
 
@@ -96,19 +95,49 @@ int parseMsgType(char* buf)
 void parseMsgContent(char *msg, char *msg_content)
 {
     char *tmp;
+    tmp = strstr(msg, "\r\n");
+    tmp = tmp + 2;
+    strcpy(msg_content, tmp);
+}
+
+
+
+void parseFilePath(char *msg, char *absolute_path){
+
+    char file_name[100];
+    parseMsgContent(msg, file_name);
+    buildFilePath(absolute_path, file_name);
+}
+
+void parseTheirRcvPort(char *msg, char *their_rcv_port){
+    char *tmp;
+    tmp = strstr(msg, "\n");
+    tmp = tmp + 1;
+    //TODO  cut the port number = length 5
+    strncpy(their_rcv_port, tmp, 5);
+    their_rcv_port[5] = '\0';
+}
+
+
+/*
+ * Helper function for parseFilePath
+ */
+void buildFilePath(char *absolute_path, char *file_name){
     char path[100];
     if (getcwd(path, sizeof(path)) == NULL)
         fprintf(stdout, "fail to get cwd: %s\n", path);
-    tmp = strstr(msg, "\r\n");
-    tmp = tmp + 2;
     strcat(path, "/");
-    strcat(path, tmp);
-    strcpy(msg_content, path);
+    strcat(path, file_name);
+    strcpy(absolute_path, path);
 }
+
+
+
+
 
 int main(int argc, char *argv[])
 {
-	int sockfd;
+	int sockfd_rcv, sockfd_snd;
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 	int numbytes;
@@ -116,7 +145,7 @@ int main(int argc, char *argv[])
 	char buf[MAXBUFLEN];
 	char s[INET6_ADDRSTRLEN];
     char ipstr[INET6_ADDRSTRLEN];
-    char *portno;
+    char *rcv_port;
 
 
     /* variables during processing client request */
@@ -126,149 +155,220 @@ int main(int argc, char *argv[])
     char *tmp1 = NULL;
 	FILE *fd;
 
-
+    if (argc != 2) {
+        fprintf(stderr,"Server: Incorrect Arguments Counts!\n");
+        exit(1);
+    }
 
     /* read stdin for port number */
-    portno = argv[1];
+    rcv_port = argv[1];
 
-    if(portno == NULL) {
-		portno = (char *) malloc(sizeof MYPORT);
-		memset(portno, 0, sizeof portno);
-		strcpy(portno, MYPORT);
-	}
-	printf("%s", portno);
 
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_INET;//AF_UNSPEC; // set to AF_INET to force IPv4
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_flags = AI_PASSIVE; // use my IP (AI_PASSIVE  tells getaddrinfo() to assign the address of my local host to the socket structures)
+	printf("%s", rcv_port);
+    while(1)
+    {
+        /*
+         * Setp 1:
+         * Create socket for Receiver on Port: rcv_port
+         */
+        memset(&hints, 0, sizeof hints);
+        memset(&servinfo, 0, sizeof servinfo);
+        memset(&p, 0, sizeof p);
 
-	if ((rv = getaddrinfo(NULL, portno, &hints, &servinfo)) != 0) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-		return 1;
-	}
+        hints.ai_family = AF_INET;//AF_UNSPEC; // set to AF_INET to force IPv4
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_PASSIVE; // use my IP (AI_PASSIVE  tells getaddrinfo() to assign the address of my local host to the socket structures)
 
-	// loop through all the results and bind to the first we can
-	for(p = servinfo; p != NULL; p = p->ai_next) {
-        
-        /*************Print Info********************/
-        void *addr;
-        char *ipver;
-        
-        // get the pointer to the address itself,
-        // different fields in IPv4 and IPv6:
-        if (p->ai_family == AF_INET) { // IPv4
-            struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
-            addr = &(ipv4->sin_addr);
-            ipver = "IPv4";
-        } else { // IPv6
-            struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
-            addr = &(ipv6->sin6_addr);
-            ipver = "IPv6";
+        if ((rv = getaddrinfo(NULL, rcv_port, &hints, &servinfo)) != 0) {
+            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+            return 1;
         }
-        
-        // convert the IP to a string and print it:
-        inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
-        printf(" %s: %s\n", ipver, ipstr);
-        /************************************/
-        
-        
-		if ((sockfd = socket(p->ai_family, p->ai_socktype,
-				p->ai_protocol)) == -1) {
-			perror("listener: socket");
-			continue;
-		}
-
-		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-			close(sockfd);
-			perror("listener: bind");
-			continue;
-		}
-
-		break;
-	}
-
-	if (p == NULL) {
-		fprintf(stderr, "listener: failed to bind socket\n");
-		return 2;
-	}
-
-    // Step 1: wait for the 1st message
-    // if msg type != 1, print error msg
-	// else, then go to Step2: enter Finite State Machine to start transfer file
-    printf("listener: waiting for client request (port number: %s)...\n", portno);
-
-	memset(buf, 0, MAXBUFLEN);
-    int addr_len = sizeof(client_addr);
-    numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
-                        (struct sockaddr *)&client_addr, (socklen_t *)&addr_len);
-    if (numbytes == -1) {
-        perror("listener: error in receiving client request");
-        exit(1);
-    }
-    fflush(stdout);
-    int client_PORT = ntohs(client_addr.sin_port);
-    char* client_IP = inet_ntoa(client_addr.sin_addr);
-    printf("\nClient IP & Port: %s:%d", client_IP, client_PORT);
-
-    msg_type = parseMsgType(buf);
-	printf("\nMessage Type:%d", msg_type);
 
 
-	//TODO
-	/* to be deleted */
-	strcpy(buf, "1\n2\n3\r\nLICENSE");
-	/* to be deleted */
+        // loop through all the results and bind to the first we can
+        for(p = servinfo; p != NULL; p = p->ai_next) {
+
+            /*************Print Info********************/
+            void *addr;
+            char *ipver;
+
+            // get the pointer to the address itself,
+            // different fields in IPv4 and IPv6:
+            if (p->ai_family == AF_INET) { // IPv4
+                struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+                addr = &(ipv4->sin_addr);
+                ipver = "IPv4";
+            } else { // IPv6
+                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+                addr = &(ipv6->sin6_addr);
+                ipver = "IPv6";
+            }
+
+            // convert the IP to a string and print it:
+            inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
+            printf(" %s: %s\n", ipver, ipstr);
+            /************************************/
 
 
+            if ((sockfd_rcv = socket(p->ai_family, p->ai_socktype,
+                    p->ai_protocol)) == -1) {
+                perror("listener: socket");
+                continue;
+            }
 
+            if (bind(sockfd_rcv, p->ai_addr, p->ai_addrlen) == -1) {
+                close(sockfd_rcv);
+                perror("listener: bind");
+                continue;
+            }
 
-    if(msg_type != 1){
-        perror("the client request is not valid.\n");
-        exit(1);
-    }else{
-        file_path = (char *)malloc(100);
-        parseMsgContent(buf, file_path);
-		printf("\nPath for requested file:%s\n\n", file_path);
-		// read file
-        fd = fopen(file_path, "r");
-        if(fd == NULL){
-            printf("File open error, %s!", strerror(errno));
-            printf("fd:%d", fd);
+            break;
         }
-    }
 
-    /* Step2:
-     * enter Finite State Machine to start transfer file.
-     */
-    /* file processing */
-    char file_buf[MAXBUFLEN];
-    char msg_buf[MAXBUFLEN * 2];
-    /* FSM workflow control */
-    int nread, chunk_id=1;
-    bool is_chunk_complete= false;
-
-    bzero(file_buf, sizeof file_buf);
-    printf("Sender Start ::");
-    nread = fread(file_buf, 1, sizeof file_buf, fd);
-
-    while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0){
-        printf("\n    [Sending]  chunk_id:%d    length:%d", chunk_id, nread);
-        buildFileTransferMsg(msg_buf, file_buf);
-        if ((numbytes = sendto(sockfd,  msg_buf, strlen(msg_buf), 0,
-                               p->ai_addr, p->ai_addrlen)) == -1) {
-            perror("[Sender]: Failed to send ");
-            is_chunk_complete = false;
-        }else{
-            is_chunk_complete = true;
+        if (p == NULL) {
+            fprintf(stderr, "listener: failed to bind socket\n");
+            return 2;
         }
+        freeaddrinfo(servinfo);
+
+
+
+
+        // Step 2: wait for the Request message
+        // if msg type != 1, print error msg
+        // else, then go to Step2: enter Finite State Machine to start transfer file
+        printf("\n\n--------\n\nlistener: listen for client request on (port number: %s)...\n", rcv_port);
+
+        memset(buf, 0, MAXBUFLEN);
+        int addr_len = sizeof(client_addr);
+        numbytes = recvfrom(sockfd_rcv, buf, MAXBUFLEN - 1, 0,
+                            (struct sockaddr *) &client_addr, (socklen_t *) &addr_len);
+        if (numbytes == -1) {
+            perror("listener: error in receiving client request");
+            exit(1);
+        }
+        fflush(stdout);
+        int client_PORT = ntohs(client_addr.sin_port);
+        char *client_IP = inet_ntoa(client_addr.sin_addr);
+        printf("\nClient IP & Port: %s:%d", client_IP, client_PORT);
+
+        msg_type = parseMsgType(buf);
+        printf("\nMessage Type:%d", msg_type);
+
+
+        //TODO
+        /* to be deleted */
+        strcpy(buf, "1\n2\n3\r\nLICENSE");
+        /* to be deleted */
+
+
+
+
+        if (msg_type != 1) {
+            perror("the client request is not valid.\n");
+            sleep(1);
+            continue;
+        } else {
+            file_path = (char *) malloc(100);
+            parseMsgContent(buf, file_path);
+            printf("\nPath for requested file:%s\n\n", file_path);
+            // read file
+            fd = fopen(file_path, "r");
+            if (fd == NULL) {
+                printf("File open error, %s!", strerror(errno));
+                printf("fd:%d", fd);
+            }
+        }
+
+
+        /*
+         * Step  3:
+         * Create Sender socket
+         */
+        /* set parameter for getaddrinfo */
+        memset(&hints, 0, sizeof hints);
+        memset(&servinfo, 0, sizeof servinfo);
+        memset(&p, 0, sizeof p);
+
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        // "getaddrinfo" will do the DNS lookup & return
+        if ((rv = getaddrinfo(client_IP, client_PORT, &hints, &servinfo)) != 0) {
+            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+            return 1;
+        }
+
+        // loop through all the results and make a socket
+        for(p = servinfo; p != NULL; p = p->ai_next) {
+
+            /*************Print Info********************/
+            void *addr;
+            char *ipver;
+
+            // get the pointer to the address itself,
+            // different fields in IPv4 and IPv6:
+            if (p->ai_family == AF_INET) { // IPv4
+                struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+                addr = &(ipv4->sin_addr);
+                ipver = "IPv4";
+            } else { // IPv6
+                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+                addr = &(ipv6->sin6_addr);
+                ipver = "IPv6";
+            }
+
+            // convert the IP to a string and print it:
+            inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
+            printf("  %s: %s\n", ipver, ipstr);
+            /************************************/
+
+            if ((sockfd_snd = socket(p->ai_family, p->ai_socktype,
+                                 p->ai_protocol)) == -1) {
+                perror("Client: socket creation ");
+                continue;
+            }
+
+            break;
+        }
+        printf("Sender IP: %s, Sender Port: %s, Requested File: %s\n", client_IP, client_PORT, file_name);
+
+        if (p == NULL) {
+            fprintf(stderr, "Sender: failed to bind socket\n");
+            return 2;
+        }
+
+        /* Step 4:
+         * enter Finite State Machine to start transfer file.
+         */
+        /* file processing */
+        char file_buf[MAXBUFLEN];
+        char msg_buf[MAXBUFLEN * 2];
+        /* FSM workflow control */
+        int nread, chunk_id = 1;
+        bool is_chunk_complete = false;
 
         bzero(file_buf, sizeof file_buf);
-        if(is_chunk_complete) chunk_id++;
-    }
+        printf("Sender Start ::");
+        nread = fread(file_buf, 1, sizeof file_buf, fd);
 
+        while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0) {
+            printf("\n    [Sending]  chunk_id:%d    length:%d", chunk_id, nread);
+            buildFileTransferMsg(msg_buf, rcv_port,file_buf);
+            if ((numbytes = sendto(sockfd_snd, msg_buf, strlen(msg_buf), 0,
+                                   p->ai_addr, p->ai_addrlen)) == -1) {
+                perror("[Sender]: Failed to send ");
+                is_chunk_complete = false;
+            } else {
+                is_chunk_complete = true;
+            }
 
+            bzero(file_buf, sizeof file_buf);
+            if (is_chunk_complete) chunk_id++;
+            sleep(0.05);
+        }
+        sleep(1);
 
+        close(sockfd_rcv);
 
 
 
@@ -276,7 +376,7 @@ int main(int argc, char *argv[])
 //    printf("listener: waiting for client msg (recvfrom)...\n");
 //
 //	addr_len = sizeof(their_addr);
-//	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
+//	if ((numbytes = recvfrom(sockfd_rcv, buf, MAXBUFLEN-1 , 0,
 //                             (struct sockaddr *)&their_addr, &addr_len)) == -1) {
 //		perror("recvfrom");
 //		exit(1);
@@ -290,8 +390,8 @@ int main(int argc, char *argv[])
 //	buf[numbytes] = '\0';
 //	printf("listener: packet contains \"%s\"\n", buf);
 
-    freeaddrinfo(servinfo);
-	close(sockfd);
+    }
+
 
 	return 0;
 }
