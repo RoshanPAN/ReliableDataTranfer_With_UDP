@@ -404,7 +404,7 @@ int main(int argc, char *argv[])
         int seq_no = 0;
         while ((nread = fread(file_buf, 1, sizeof file_buf - 100, fd)) > 0) {
             printf("\n[Sending]  chunk_id:%d    length:%d\n", chunk_id, nread);
-            sleep(0.05);
+            sleep(0.25);
 //            sleep(5);
             //TODO sequence number
             int msg_len = buildFileTransferMsg(msg_buf, atoi(rcv_port), seq_no,file_buf);

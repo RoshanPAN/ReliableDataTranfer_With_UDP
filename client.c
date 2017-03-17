@@ -390,16 +390,18 @@ int main(int argc, char *argv[])
     int current_state = WAIT_FOR_0;
     int is_loss = false;
     int n = 0;
-    while(1)
+    while(!iscomplete)
     {
         n++;
+        memset(in_msg_buf, 0, sizeof in_msg_buf);
+        bzero(data_buf, sizeof data_buf);
+        bzero(out_msg_buf, sizeof out_msg_buf);
         // Finite State Machine
         switch (current_state)
         {
             case WAIT_FOR_0:
                 // Reset buffer
-                memset(in_msg_buf, 0, sizeof in_msg_buf);
-                bzero(data_buf, sizeof data_buf);
+
                 // Receive msg with loss (back to receiving state when loss)
                 do{
                     numbytes = recvfrom(sockfd_rcv, in_msg_buf, sizeof in_msg_buf, 0,
@@ -412,57 +414,104 @@ int main(int argc, char *argv[])
                         is_loss = false;
                     }
                 }while(is_loss);
-                
 
-//                //logic for rdt3.0 based on seq_no
-//                seq_no = parseSequenceNumber(msg);
-//                printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
-//                switch (seq_no)
-//                {
-//                    case 0:
-//                        // write into file
-//                        parseMsgContent(in_msg_buf, data_buf);
-//                        appendToFile(file_name, data_buf);
-//                        pkt_id ++;
-//                        // Send ACK0
-//                        buildACKMsg()
-//
-//                        break;
-//
-//                    case 1:
-//                        // write into file and send NAK0
-//
-//                        break;
-//                }
+                if(parseMsgType(in_msg_buf) == MISSION_OVER){
+                    iscomplete = true;
+                    break;
+                }
 
-
-
-
-
-
-
-//                switch (parseMsgType(msg_buf)){
-//                    case FILE_TRANSFER:
-//                        current_state = FILE_TRANSFER; break;
-//                    case ERR:
-//                        current_state = ERR; break;
-//                    case MISSION_OVER:
-//                        current_state = MISSION_OVER; break;
-//                    default:
-//                        current_state = ERR; break;
-//                }
+                //logic for rdt3.0 based on seq_no
+                seq_no = parseSequenceNumber(msg);
+                switch (seq_no)
+                {
+                    case 0:
+                        // write into file
+                        parseMsgContent(in_msg_buf, data_buf);
+                        appendToFile(file_name, data_buf);
+                        printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
+                        // Send ACK 0
+                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                                               p->ai_addr, p->ai_addrlen)) == -1) {
+                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                        }else{
+                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                        }
+                        pkt_id ++;
+                        current_state = WAIT_FOR_1;
+                        break;
+                    case 1:
+                        // send ACK 1
+                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                                               p->ai_addr, p->ai_addrlen)) == -1) {
+                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                        }else{
+                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                        }
+                        current_state = WAIT_FOR_0;
+                }
                 break;
+
             case WAIT_FOR_1:
+                // Reset buffer
+                memset(in_msg_buf, 0, sizeof in_msg_buf);
+                bzero(data_buf, sizeof data_buf);
+                bzero(out_msg_buf, sizeof out_msg_buf);
+                // Receive msg with loss (back to receiving state when loss)
+                do{
+                    numbytes = recvfrom(sockfd_rcv, in_msg_buf, sizeof in_msg_buf, 0,
+                                        (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
+                    if((rand() % 100) < LOSS_PROB) {
+                        printf("[Receiving] Package #%d Loss. \n", pkt_id);
+                        fflush(stdout);
+                        is_loss = true;
+                    }else{
+                        is_loss = false;
+                    }
+                }while(is_loss);
 
-                break;
-            case MISSION_OVER:
-                iscomplete = true;
-                break;
-        }
-        if(iscomplete) break;
+                if(parseMsgType(in_msg_buf) == MISSION_OVER){
+                    iscomplete = true;
+                    break;
+                }
 
-    }
-    printf("Total number of packages received: %d", pkt_id - 1);
+                //logic for rdt3.0 based on seq_no
+                seq_no = parseSequenceNumber(msg);
+                switch (seq_no)
+                {
+                    case 0:
+                        // Send ACK 0
+                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                                               p->ai_addr, p->ai_addrlen)) == -1) {
+                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                        }else{
+                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                        }
+                        current_state = WAIT_FOR_1;
+                        break;
+                    case 1:
+                        // write into file
+                        parseMsgContent(in_msg_buf, data_buf);
+                        appendToFile(file_name, data_buf);
+                        printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
+                        pkt_id ++;
+                        // send ACK 1
+                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                                               p->ai_addr, p->ai_addrlen)) == -1) {
+                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                        }else{
+                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                        }
+                        current_state = WAIT_FOR_0;
+                }
+                break;
+        } // end of swtich case
+
+    } // end of while
+    printf("Total number of packages received: %d", n);
 
     freeaddrinfo(servinfo);
     close(sockfd_rcv);
