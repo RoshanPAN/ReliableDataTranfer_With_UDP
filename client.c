@@ -36,7 +36,12 @@ typedef int bool;
 #define true 1
 #define false 0
 
+/* package loss probability k% */
 #define LOSS_PROB 40
+
+/* FSM States */
+#define WAIT_FOR_0 0
+#define WAIT_FOR_1 1
 
 
 
@@ -375,41 +380,63 @@ int main(int argc, char *argv[])
      */
     /* file processing */
     char data_buf[MAXBUFLEN + 100];
-    char msg_buf[MAXBUFLEN * 2];
+    char in_msg_buf[MAXBUFLEN * 2];
+    char out_msg_buf[MAXBUFLEN];
     /* FSM workflow control */
-    int nread, chunk_id, expected_seq_no, seq_no;
+    int nread, pkt_id, expected_seq_no, seq_no;
     bool iscomplete = false;
     struct sockaddr_in server_addr;
     int addr_len = sizeof(server_addr);
-    int current_state = FILE_TRANSFER;
-
+    int current_state = WAIT_FOR_0;
+    int is_loss = false;
+    int n = 0;
     while(1)
     {
-        fflush(stdout);
+        n++;
         // Finite State Machine
         switch (current_state)
         {
-            case FILE_TRANSFER:
+            case WAIT_FOR_0:
                 // Reset buffer
-                memset(msg_buf, 0, sizeof msg_buf);
+                memset(in_msg_buf, 0, sizeof in_msg_buf);
                 bzero(data_buf, sizeof data_buf);
-                // Receive msg
-                numbytes = recvfrom(sockfd_rcv, msg_buf, sizeof msg_buf, 0,
-                                    (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
+                // Receive msg with loss (back to receiving state when loss)
+                do{
+                    numbytes = recvfrom(sockfd_rcv, in_msg_buf, sizeof in_msg_buf, 0,
+                                        (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
+                    if((rand() % 100) < LOSS_PROB) {
+                        printf("[Receiving] Package #%d Loss. \n", pkt_id);
+                        fflush(stdout);
+                        is_loss = true;
+                    }else{
+                        is_loss = false;
+                    }
+                }while(is_loss);
+                
+
+//                //logic for rdt3.0 based on seq_no
+//                seq_no = parseSequenceNumber(msg);
+//                printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
+//                switch (seq_no)
+//                {
+//                    case 0:
+//                        // write into file
+//                        parseMsgContent(in_msg_buf, data_buf);
+//                        appendToFile(file_name, data_buf);
+//                        pkt_id ++;
+//                        // Send ACK0
+//                        buildACKMsg()
+//
+//                        break;
+//
+//                    case 1:
+//                        // write into file and send NAK0
+//
+//                        break;
+//                }
 
 
-                if((rand() % 100) < LOSS_PROB) {
-                    printf("[Receiving] Chunk #%d Loss. \n", chunk_id);
-                    fflush(stdout);
-                    chunk_id ++;
-                }else{
-                    //TODO add logic for rdt, but now, just receive and write into file
-                    parseMsgContent(msg_buf, data_buf);
-                    seq_no = parseSequenceNumber(msg);
-                    printf("[Receiving] Received chunk #%d, length %d.\n ", chunk_id, numbytes);
-                    appendToFile(file_name, data_buf);
-                    chunk_id ++;
-                }
+
 
 
 
@@ -425,6 +452,9 @@ int main(int argc, char *argv[])
 //                        current_state = ERR; break;
 //                }
                 break;
+            case WAIT_FOR_1:
+
+                break;
             case MISSION_OVER:
                 iscomplete = true;
                 break;
@@ -432,7 +462,7 @@ int main(int argc, char *argv[])
         if(iscomplete) break;
 
     }
-    printf("Total number of packages received: %d", chunk_id - 1);
+    printf("Total number of packages received: %d", pkt_id - 1);
 
     freeaddrinfo(servinfo);
     close(sockfd_rcv);
