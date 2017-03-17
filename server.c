@@ -16,7 +16,7 @@
 #define SENDER_PORT "14952"	// the port for server to send data
 #define RCV_PORT "14951"  // the port for server to receive msg (NOT used)
 
-#define MAXBUFLEN 1025
+#define MAXBUFLEN 1000
 #define PATH_LEN 100
 
 typedef int bool;
@@ -36,7 +36,7 @@ void *get_in_addr(struct sockaddr *sa)
 /* msg format:
      * (MsgType::Integer)\n
      * (rcv_port::Integer)\n
-     * (NotUsed::Integer)\r\n
+     * (seq_no::Integer)\r\n
      * (MsgContent::char/binary)
     */
 
@@ -44,48 +44,59 @@ void *get_in_addr(struct sockaddr *sa)
 #define FILE_TRANSFER 2
 #define ACK 3
 #define NAK 4
-#define ERR 5  // file not exists and so on
+#define MISSION_OVER 5
+#define ERR 6  // file not exists and so on
+
+
+
+
 /* When sending Msg */
-void buildMsg(char *msg, int msg_type, int port_num, char *content){
+int buildMsg(char *msg, int msg_type, int port_num, int seq_no,char *content){
 
     // Put whole header + msg content into msg
+    int len = 0;
     char header[50];
     bzero(header, sizeof header);
-    sprintf(header, "%d\n%.5d\n0\r\n", msg_type, port_num);
+    sprintf(header, "%d\n%.5d\n%d\r\n", msg_type, port_num, seq_no);
+    len = len + strlen(header) + 1;
     char tmp[2000];
     bzero(tmp, sizeof tmp);
     strcpy(tmp, header);
     strcat(tmp, content);
+    len = len + strlen(content) + 1;
     bzero(msg, sizeof msg);
     strcpy(msg, tmp);
+    return len;
 }
 
-void buildFileRequestMsg(char *msg, int my_rcv_port_num, char *file_name){
-    buildMsg(msg, 1, my_rcv_port_num, file_name);
+int buildFileRequestMsg(char *msg, int my_rcv_port_num, char *file_name){
+    int len = buildMsg(msg, 1, my_rcv_port_num, 0, file_name);
+    return len;
 }
 
-void buildFileTransferMsg(char *msg, int my_rcv_port_num, char *file_chunk){
-    buildMsg(msg, FILE_TRANSFER, my_rcv_port_num, file_chunk);
+int buildFileTransferMsg(char *msg, int my_rcv_port_num, int seq_no,char *file_chunk){
+    int len =  buildMsg(msg, FILE_TRANSFER, my_rcv_port_num, seq_no, file_chunk);
+    return len;
 }
 
-void buildACKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
+void buildACKMsg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, ACK, my_rcv_port_num, chunk_id_str);
+    buildMsg(msg, ACK, my_rcv_port_num, seq_no, chunk_id_str);
 }
 
-void buildNAKMsg(char *msg, int my_rcv_port_num, int next_chunk_id){
+void buildNAKMsg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, NAK, my_rcv_port_num, chunk_id_str);
+    buildMsg(msg, NAK, my_rcv_port_num, seq_no,chunk_id_str);
 }
+
 
 
 /* When Receiving Msg */
 int parseMsgType(char* buf)
 {
     char num = buf[0];
-    printf("%c", num);
     char tmp[2];
     tmp[0] = num;
     tmp[1] = '\0';
@@ -100,25 +111,6 @@ void parseMsgContent(char *msg, char *msg_content)
     strcpy(msg_content, tmp);
 }
 
-
-
-void parseFilePath(char *msg, char *absolute_path){
-
-    char file_name[100];
-    parseMsgContent(msg, file_name);
-    buildFilePath(absolute_path, file_name);
-}
-
-void parseTheirRcvPort(char *msg, char *their_rcv_port){
-    char *tmp;
-    bzero(their_rcv_port, sizeof their_rcv_port);
-    tmp = strstr(msg, "\n");
-    tmp = tmp + 1;
-    strncpy(their_rcv_port, tmp, 5);
-    their_rcv_port[5] = '\0';
-}
-
-
 /*
  * Helper function for parseFilePath
  */
@@ -130,6 +122,70 @@ void buildFilePath(char *absolute_path, char *file_name){
     strcat(path, file_name);
     strcpy(absolute_path, path);
 }
+
+void parseFilePath(char *msg, char *absolute_path){
+
+    char file_name[100];
+    parseMsgContent(msg, file_name);
+    buildFilePath(absolute_path, file_name);
+}
+
+void parseTheirRcvPort(char *msg, char *their_rcv_port){
+    char *tmp;
+    tmp = strstr(msg, "\n");
+    tmp = tmp + 1;
+    //TODO  cut the port number = length 5
+    strncpy(their_rcv_port, tmp, 5);
+    their_rcv_port[5] = '\0';
+}
+
+int parseSequenceNumber(char *msg){
+    char *tmp;
+    tmp = strstr(msg, "\n");
+    tmp = tmp + 1;
+    tmp = strstr(tmp, "\n");
+    tmp = tmp + 1;
+    char num[5];
+    bzero(num, sizeof num);
+    strncpy(num, tmp, 1);
+    num[1] = '\0';
+    return atoi(num);
+}
+
+
+
+
+void buildPathToRcvFolder(char *absolute_path, char *file_name){
+    char path[100];
+    if (getcwd(path, sizeof(path)) == NULL)
+        fprintf(stdout, "fail to get cwd: %s\n", path);
+    strcat(path, "/");
+    strcat(path, "ReceivedFile/");
+    strcat(path, file_name);
+    strcpy(absolute_path, path);
+}
+
+
+void appendToFile(char *file_name, char *data_buf){
+    char absolute_path[100];
+    buildPathToRcvFolder(absolute_path, file_name);
+//    printf(absolute_path);
+    FILE *fd = NULL;
+    fd = fopen(absolute_path, "a");
+    if(fd){
+        fputs(data_buf, fd);
+        fclose(fd);
+    }else{
+        perror("\n[Received File] During opening ");
+    }
+}
+
+/* msg format:
+     * (MsgType::Integer)\n
+     * (rcv_port::Integer)\n
+     * (seq_no::Integer)\r\n
+     * (MsgContent::char/binary)
+    */
 
 
 
@@ -165,7 +221,6 @@ int main(int argc, char *argv[])
     rcv_port = argv[1];
 
 
-	printf("%s", rcv_port);
     while(1)
     {
         /*
@@ -262,7 +317,6 @@ int main(int argc, char *argv[])
 
 
 
-
         if (msg_type != 1) {
             perror("the client request is not valid.\n");
             sleep(1);
@@ -275,7 +329,7 @@ int main(int argc, char *argv[])
             fd = fopen(file_path, "r");
             if (fd == NULL) {
                 printf("File open error, %s!", strerror(errno));
-                printf("fd:%d", fd);
+                continue;
             }
         }
 
@@ -289,7 +343,6 @@ int main(int argc, char *argv[])
 
         hints2.ai_family = AF_INET;
         hints2.ai_socktype = SOCK_DGRAM;
-        printf(client_PORT);
         // "getaddrinfo" will do the DNS lookup & return
         if ((rv2 = getaddrinfo(client_IP, client_PORT, &hints2, &servinfo2)) != 0) {
             fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv2));
@@ -347,13 +400,16 @@ int main(int argc, char *argv[])
 
         bzero(file_buf, sizeof file_buf);
         printf("Sender Start ::");
-        nread = fread(file_buf, 1, sizeof file_buf, fd);
-
-        while ((nread = fread(file_buf, 1, sizeof file_buf, fd)) > 0) {
-            printf("\n    [Sending]  chunk_id:%d    length:%d", chunk_id, nread);
-            buildFileTransferMsg(msg_buf, rcv_port,file_buf);
-            if ((numbytes = sendto(sockfd_snd, msg_buf, strlen(msg_buf), 0,
-                                   p->ai_addr, p->ai_addrlen)) == -1) {
+        sleep(0.1);
+        int seq_no = 0;
+        while ((nread = fread(file_buf, 1, sizeof file_buf - 100, fd)) > 0) {
+            printf("\n[Sending]  chunk_id:%d    length:%d\n", chunk_id, nread);
+            sleep(0.05);
+            //TODO sequence number
+            int msg_len = buildFileTransferMsg(msg_buf, atoi(rcv_port), seq_no,file_buf);
+            printf(msg_buf);
+            if ((numbytes = sendto(sockfd_snd, msg_buf, sizeof msg_buf, 0,
+                                   p2->ai_addr, p2->ai_addrlen)) == -1) {
                 perror("[Sender]: Failed to send ");
                 is_chunk_complete = false;
             } else {
@@ -361,12 +417,27 @@ int main(int argc, char *argv[])
             }
 
             bzero(file_buf, sizeof file_buf);
-            if (is_chunk_complete) chunk_id++;
-            sleep(0.05);
+            if (is_chunk_complete) {
+                chunk_id++;
+            }
         }
-        sleep(1);
+
+        /* Step 5:
+         * Upon finish, send a MISSION_OVER Message
+         */
+        bzero(msg_buf, sizeof msg_buf);
+        buildMsg(msg_buf, MISSION_OVER, atoi(rcv_port), seq_no, "\r\n<FINISH>\r\n");
+        if ((numbytes = sendto(sockfd_snd, msg_buf, strlen(msg_buf), 0,
+                               p2->ai_addr, p2->ai_addrlen)) == -1) {
+            perror("[Sender]: MISSION_OVER Message ");
+        }
+
+
+
+        sleep(0.05);
 
         close(sockfd_rcv);
+        close(sockfd_snd);
         printf("\n ----- Finish File Sending ---- \n");
 
 
