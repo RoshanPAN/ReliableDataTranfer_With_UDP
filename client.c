@@ -23,12 +23,11 @@
     */
 #define MAXBUFLEN 900
 
-#define INITIAL_STATE 0
-#define CONFIRM 7
+
 #define FILE_REQUEST 1
 #define FILE_TRANSFER 2
-#define ACK 3
-#define NAK 4
+#define ACK0 3
+#define ACK1 4
 #define MISSION_OVER 5
 #define ERR 6  // file not exists and so on
 
@@ -37,7 +36,7 @@ typedef int bool;
 #define false 0
 
 /* package loss probability k% */
-#define LOSS_PROB 40
+#define LOSS_PROB 20
 
 /* FSM States */
 #define WAIT_FOR_0 0
@@ -74,16 +73,16 @@ int buildFileTransferMsg(char *msg, int my_rcv_port_num, int seq_no,char *file_c
     return len;
 }
 
-void buildACKMsg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
+void buildACK0Msg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, ACK, my_rcv_port_num, seq_no, chunk_id_str);
+    buildMsg(msg, ACK0, my_rcv_port_num, seq_no, chunk_id_str);
 }
 
-void buildNAKMsg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
+void buildACK1Msg(char *msg, int my_rcv_port_num, int seq_no, int next_chunk_id){
     char chunk_id_str[10];
     sprintf(chunk_id_str, "%d", next_chunk_id);
-    buildMsg(msg, NAK, my_rcv_port_num, seq_no,chunk_id_str);
+    buildMsg(msg, ACK1, my_rcv_port_num, seq_no,chunk_id_str);
 }
 
 
@@ -218,6 +217,7 @@ int main(int argc, char *argv[])
     char *file_name = NULL;
     char *server_IP = NULL;
     char rcv_port[10];
+    srand(time(NULL));  // random feeds
 
     /* read stdin for port number */
 	if (argc != 4) {
@@ -383,7 +383,7 @@ int main(int argc, char *argv[])
     char in_msg_buf[MAXBUFLEN * 2];
     char out_msg_buf[MAXBUFLEN];
     /* FSM workflow control */
-    int nread, pkt_id, expected_seq_no, seq_no;
+    int nread, pkt_id = 1, expected_seq_no, seq_no;
     bool iscomplete = false;
     struct sockaddr_in server_addr;
     int addr_len = sizeof(server_addr);
@@ -400,12 +400,11 @@ int main(int argc, char *argv[])
         switch (current_state)
         {
             case WAIT_FOR_0:
-                // Reset buffer
-
                 // Receive msg with loss (back to receiving state when loss)
                 do{
                     numbytes = recvfrom(sockfd_rcv, in_msg_buf, sizeof in_msg_buf, 0,
                                         (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
+
                     if((rand() % 100) < LOSS_PROB) {
                         printf("[Receiving] Package #%d Loss. \n", pkt_id);
                         fflush(stdout);
@@ -414,7 +413,7 @@ int main(int argc, char *argv[])
                         is_loss = false;
                     }
                 }while(is_loss);
-
+                printf(in_msg_buf);
                 if(parseMsgType(in_msg_buf) == MISSION_OVER){
                     iscomplete = true;
                     break;
@@ -428,26 +427,27 @@ int main(int argc, char *argv[])
                         // write into file
                         parseMsgContent(in_msg_buf, data_buf);
                         appendToFile(file_name, data_buf);
-                        printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
+                        printf("[WAIT_FOR_0] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
                         // Send ACK 0
-                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
-                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                        buildACK0Msg(out_msg_buf, atoi(rcv_port), seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, out_msg_buf, sizeof out_msg_buf, 0,
                                                p->ai_addr, p->ai_addrlen)) == -1) {
-                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                            printf("[WAIT_FOR_0] Failed to send ACK%d to server.\n", seq_no);
                         }else{
-                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                            printf("[WAIT_FOR_0] ACK%d is sent to server.\n", seq_no);
                         }
                         pkt_id ++;
                         current_state = WAIT_FOR_1;
                         break;
                     case 1:
                         // send ACK 1
-                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
-                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                        bzero(out_msg_buf, sizeof out_msg_buf);
+                        buildACK1Msg(out_msg_buf, atoi(rcv_port), seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, out_msg_buf, sizeof out_msg_buf, 0,
                                                p->ai_addr, p->ai_addrlen)) == -1) {
-                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                            printf("[WAIT_FOR_0] Failed to send ACK%d to server.\n", seq_no);
                         }else{
-                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                            printf("[WAIT_FOR_0] ACK%d is sent to server.\n", seq_no);
                         }
                         current_state = WAIT_FOR_0;
                 }
@@ -455,39 +455,42 @@ int main(int argc, char *argv[])
 
             case WAIT_FOR_1:
                 // Reset buffer
-                memset(in_msg_buf, 0, sizeof in_msg_buf);
+                bzero(in_msg_buf, sizeof in_msg_buf);
                 bzero(data_buf, sizeof data_buf);
                 bzero(out_msg_buf, sizeof out_msg_buf);
                 // Receive msg with loss (back to receiving state when loss)
                 do{
                     numbytes = recvfrom(sockfd_rcv, in_msg_buf, sizeof in_msg_buf, 0,
                                         (struct sockaddr *) &server_addr, (socklen_t *) &addr_len);
+
                     if((rand() % 100) < LOSS_PROB) {
-                        printf("[Receiving] Package #%d Loss. \n", pkt_id);
+                        printf("[WAIT_FOR_1] Package #%d Loss. \n", pkt_id);
                         fflush(stdout);
                         is_loss = true;
                     }else{
                         is_loss = false;
                     }
                 }while(is_loss);
-
+                printf("[WAIT_FOR_1]\n");
+                printf(in_msg_buf);
                 if(parseMsgType(in_msg_buf) == MISSION_OVER){
                     iscomplete = true;
                     break;
                 }
 
                 //logic for rdt3.0 based on seq_no
-                seq_no = parseSequenceNumber(msg);
+                seq_no = parseSequenceNumber(in_msg_buf);
                 switch (seq_no)
                 {
                     case 0:
                         // Send ACK 0
-                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
-                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                        bzero(out_msg_buf, sizeof out_msg_buf);
+                        buildACK0Msg(out_msg_buf, atoi(rcv_port), seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, out_msg_buf, sizeof out_msg_buf, 0,
                                                p->ai_addr, p->ai_addrlen)) == -1) {
-                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                            printf("[WAIT_FOR_1] Failed to send ACK%d to server.\n", seq_no);
                         }else{
-                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                            printf("[WAIT_FOR_1] ACK%d is sent to server.\n", seq_no);
                         }
                         current_state = WAIT_FOR_1;
                         break;
@@ -495,15 +498,15 @@ int main(int argc, char *argv[])
                         // write into file
                         parseMsgContent(in_msg_buf, data_buf);
                         appendToFile(file_name, data_buf);
-                        printf("[Receiving] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
+                        printf("[WAIT_FOR_1] Received Packet #%d, length %d, seq no.: %d .\n ", pkt_id, numbytes, seq_no);
                         pkt_id ++;
                         // send ACK 1
-                        buildACKMsg(out_msg_buf, rcv_port, seq_no, pkt_id + 1);
-                        if ((numbytes = sendto(sockfd_snd, msg, strlen(msg), 0,
+                        buildACK1Msg(out_msg_buf, atoi(rcv_port), seq_no, pkt_id + 1);
+                        if ((numbytes = sendto(sockfd_snd, out_msg_buf, sizeof out_msg_buf, 0,
                                                p->ai_addr, p->ai_addrlen)) == -1) {
-                            printf("[Receiving] Failed to send ACK%d to server.", seq_no);
+                            printf("[WAIT_FOR_1] Failed to send ACK%d to server.\n", seq_no);
                         }else{
-                            printf("[Receiving] ACK%d is sent to server.", seq_no);
+                            printf("[WAIT_FOR_1] ACK%d is sent to server.\n", seq_no);
                         }
                         current_state = WAIT_FOR_0;
                 }
