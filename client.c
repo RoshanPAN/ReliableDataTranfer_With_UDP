@@ -24,12 +24,12 @@
 #define MAXBUFLEN 900
 
 
-#define FILE_REQUEST 1
-#define FILE_TRANSFER 2
-#define ACK0 3
-#define ACK1 4
-#define MISSION_OVER 5
-#define ERR 6  // file not exists and so on
+#define FILE_REQUEST 1  // client side
+#define FILE_TRANSFER 2 // Server side
+#define ACK0 3 // client side
+#define ACK1 4 // client side
+#define MISSION_OVER 5 // Server side
+#define ERR 6  // Server side
 
 typedef int bool;
 #define true 1
